@@ -1,0 +1,70 @@
+<app>
+    <urls>
+        <u href="http://localhost:3000/" />
+        <u href="http://inscale.malariaconsortium.org/" />
+        <u href="http://inscale.malariaconsortium.org/" />
+        <u href="http://inscale.malariaconsortium.org:3000/" />
+        <u href="http://inscale.malariaconsortium.org:3000/" />
+        <u href="sms://+8779" />
+    </urls>
+    <forms>
+        <f id="Weekly Report" pre="vht ">
+            <t />
+            <vc />
+            <date>Start date:</date>
+            <few>
+                <i t="Number of male children (SEX M):" id="male" />
+                <i t="Number of female children (SEX F):" id="fem" />
+                <i t="Number of RDT results positive (+):" id="rdtp" />
+                <i t="Number of RDT results negative (-):" id="rdtn" />
+                <i t="Number of children with diarrhoea:" id="diar" />
+                <i t="Number of children with fast breathing:" id="fastb" />
+                <i t="Number of children with fever:" id="fever" />
+                <i t="Number of children with danger sign:" id="danger" />
+                <i t="Number of children treated within 24 hours:" id="treated" />
+                <i t="Number treated with ORS:" id="ors" />
+                <i t="Number treated with Zinc 1/2 tablet:" id="zinc12" />
+                <i t="Number treated with Zinc 1 tablet:" id="zinc" />
+                <i t="Number treated with Amoxicillin Red:" id="amoxr" />
+                <i t="Number treated with Amoxicillin Green:" id="amoxg" />
+                <i t="Number treated with ACT - Coartem Yellow:" id="coary" />
+                <i t="Number treated with ACT - Coartem Blue:" id="coarb" />
+                <i t="Number treated with Rectal Artesunate (total):" id="recart" />
+                <i t="Number of children referred:" id="ref" />
+                <i t="Number of children who died:" id="death" />
+                <i t="Number of male newborns (SEX M):" id="mnew" />
+                <i t="Number of female newborns (SEX F):" id="fnew" />
+                <i t="Number of home visits Day 1:" id="hv1" />
+                <i t="Number of home visits Day 3:" id="hv3" />
+                <i t="Number of home visits Day 7:" id="hv7" />
+                <i t="Number of newborns with danger signs:" id="newbdanger" />
+                <i t="Number of newborns referred:" id="newbref" />
+                <i t="Number of children with Yellow MUAC:" id="yellow" />
+                <i t="Number of children with Red MUAC/Oedema:" id="red" />
+            </few>
+            <int>
+                <x t="Rectal Artesunate balance:" id="recartbal" />
+                <x t="ORS balance:" id="orsbal" />
+                <x t="Zinc balance:" id="zincbal" />
+                <x t="Yellow ACT balance:" id="yactbal" />
+                <x t="Blue ACT balance:" id="bactbal" />
+                <x t="Red Amoxicillin balance:" id="ramoxbal" />
+                <x t="Green Amoxicillin balance:" id="gamoxbal" />
+                <x t="RDT balance:" id="rdtbal" />
+            </int>
+            <choice t="Pairs of gloves balance" id="glvbal">
+                <o v="MT5">5 pairs or more</o>
+                <o v="LT5">Less than 5 pairs</o>
+            </choice>
+        </f>
+        <f id="Respiratory Timer" r="no">
+            <pulser secs="60" t="Respiratory Timer">Please note the number of breaths per minute.</pulser>
+        </f>
+        <f id="RDT Timer" r="no">
+            <cd secs="900" t="RDT Countdown Timer">15 minutes have elapsed. Please check and record the results.</cd>
+        </f>
+        <f id="Update Questionnaire">
+            <upd />
+        </f>
+    </forms>
+</app>
