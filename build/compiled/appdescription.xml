@@ -1,0 +1,68 @@
+<app>
+    <urls>
+        <u href="http://localhost:3000/inbound" />
+        <u href="http://inscale.malariaconsortium.org/inbound" />
+        <u href="http://inscale.malariaconsortium.org/inbound" />
+        <u href="http://inscale.malariaconsortium.org:3000/inbound" />
+        <u href="http://inscale.malariaconsortium.org:3000/inbound" />
+        <u href="sms://+8779" />
+    </urls>
+    <forms>
+        <f id="Weekly Report" pre="vht ">
+            <t />
+            <vc />
+            <date>Report start date:</date>
+            <i id="male">Number of male children (SEX M):</i>
+            <i id="fem">Number of female children (SEX F):</i>
+            <i id="rdtp">Number of RDT results positive (+):</i>
+            <i id="rdtn">Number of RDT results negative (-):</i>
+            <i id="diar">Number of children with diarrhoea:</i>
+            <i id="fastb">Number of children with fast breathing:</i>
+            <i id="fever">Number of children with fever:</i>
+            <i id="danger">Number of children with danger sign:</i>
+            <i id="treated">Number of children treated within 24 hours:</i>
+            <i id="ors">Number treated with ORS:</i>
+            <i id="zinc12">Number treated with Zinc 1/2 tablet:</i>
+            <i id="zinc">Number treated with Zinc 1 tablet:</i>
+            <i id="amoxr">Number treated with Amoxicillin Red:</i>
+            <i id="amoxg">Number treated with Amoxicillin Green:</i>
+            <i id="coary">Number treated with ACT - Coartem Yellow:</i>
+            <i id="coarb">Number treated with ACT - Coartem Blue:</i>
+            <i id="recart">Number treated with Rectal Artesunate (total):</i>
+            <i id="ref">Number of children referred:</i>
+            <i id="death">Number of children who died:</i>
+            <i id="mnew">Number of male newborns (SEX M):</i>
+            <i id="fnew">Number of female newborns (SEX F):</i>
+            <i id="hv1">Number of home visits Day 1:</i>
+            <i id="hv3">Number of home visits Day 3:</i>
+            <i id="hv7">Number of home visits Day 7:</i>
+            <i id="newbdanger">Number of newborns with danger signs:</i>
+            <i id="newbref">Number of newborns referred:</i>
+            <i id="yellow">Number of children with Yellow MUAC:</i>
+            <i id="red">Number of children with Red MUAC/Oedema:</i>
+            <x id="recartbal">Rectal Artesunate balance:</x>
+            <x id="orsbal">ORS balance:</x>
+            <x id="zincbal">Zinc balance:</x>
+            <x id="yactbal">Yellow ACT balance:</x>
+            <x id="bactbal">Blue ACT balance:</x>
+            <x id="ramoxbal">Red Amoxicillin balance:</x>
+            <x id="gamoxbal">Green Amoxicillin balance:</x>
+            <x id="rdtbal">RDT balance:</x>
+            <choice t="Pairs of gloves balance" id="glvbal">
+                <o v="MT5">5 pairs or more</o>
+                <o v="LT5">Less than 5 pairs</o>
+            </choice>
+        </f>
+        <f id="Respiratory Timer" r="no">
+            <pulser secs="60" t="Respiratory Timer">Please note the number of breaths per minute.</pulser>
+        </f>
+        <f id="RDT Timer" r="no">
+            <cd secs="900" t="RDT Countdown Timer">15 minutes have elapsed. Please check and record the results.</cd>
+        </f>
+        <f id="Help" r="no">
+            <h t="Schedules">Remember to submit data for the week every Sunday.</h>
+            <h t="Timers">When you use the RDT timer, you just wait for the alarm and then check the RDT kit.</h>
+            <ph t="Programmer" n="tel:+256772344681" />
+        </f>
+    </forms>
+</app>

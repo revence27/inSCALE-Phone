@@ -1,10 +1,10 @@
-MIDlet-1: inSCALE, /contlogo.png, inscaleproject.inSCALE
+MIDlet-1: inSCALE,/inscaleproject/inscalelogo.png,inscaleproject.inSCALE
 MIDlet-Description: The VHT phone application of the inSCALE Project, for submitting ICCM data.
 MIDlet-Icon: /inscalelogo.png
 MIDlet-Info-URL: http://inscale.malariaconsortium.org/
-MIDlet-Jar-Size: 35708
+MIDlet-Jar-Size: 304401
 MIDlet-Jar-URL: inSCALEProject.jar
-MIDlet-Name: inSCALE Project
+MIDlet-Name: inSCALE
 MIDlet-Vendor: Scyfy Technologies
 MIDlet-Version: 2.0
 MicroEdition-Configuration: CLDC-1.1
