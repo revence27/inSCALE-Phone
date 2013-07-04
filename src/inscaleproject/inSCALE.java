@@ -17,10 +17,6 @@ import org.xml.sax.helpers.DefaultHandler;
  * @author Revence Kalibwani
  */
 
-//  TODO: Make the counter keys work with the big one.
-//  TODO: Make a text element. Make it formattable?
-//  TODO: Make SendPending keep sync between memory and disk for pending messages.
-
 class Tools
 {
     public static String oh(long x)
@@ -30,39 +26,64 @@ class Tools
     }
 }
 
-class SendPending extends Form implements Runnable, Tandem
+class SendPending extends Form implements Runnable, Tandem, CommandListener
 {
     private String title, response;
     private StringItem label;
     private MIDlet mama;
     private Displayable prev;
     private App app;
+    private Command back, retry;
+    private Thread current;
+    private boolean running;
     
-    public SendPending(MIDlet m, App a)
+    public SendPending(Displayable p, MIDlet m, App a)
     {
         super("Pending Submissions");
         app         = a;
         mama        = m;
+        prev        = p;
+        running     = false;
         title       = "Pending Submissions";
         response    = null;
         label       = new StringItem(title, "Sending pending submissions ...");
+        back        = new Command("Back", Command.BACK, 0);
+        retry       = new Command("Retry", Command.OK, 0);
         this.append(label);
+        this.addCommand(back);
+        //  this.addCommand(retry);
+        this.setCommandListener(this);
+    }
+
+    public void commandAction(Command c, Displayable d)
+    {
+        if(c == back)
+        {
+            Display.getDisplay(mama).setCurrent(prev);
+        }
+        else if(c == retry)
+        {
+            if(running) return;
+            if(current == null) current = new Thread(this);
+            current.start();
+        }
     }
 
     public void run()
     {
+        running       = true;
+        try{this.removeCommand(retry);}catch(Exception ex){}
+        Stack them    = app.getPending();
         try
         {
             Vector urls   = app.getURLs();
             String err    = "";
-            Stack them    = app.getPending();
             int tries     = them.size();
             while((!them.isEmpty()) && tries > 0)
             {
                 Submission nxt  = (Submission) them.peek();
                 String escXML   = URLUTF8Encoder.encode(nxt.asXML(app));
                 byte[] query    = ("message=" + escXML).getBytes();
-                int successes   = urls.size();
                 for(int notI = 0; notI < urls.size(); ++notI)
                 {
                     String u = (String) urls.elementAt(notI);
@@ -86,7 +107,7 @@ class SendPending extends Form implements Runnable, Tandem
                                 try
                                 {
                                     InputStream ins = hc.openInputStream();
-                                    byte[] resp = new byte[ins.available()];
+                                    byte[] resp = new byte[(int) hc.getLength()];
                                     ins.read(resp);
                                     response    = new String(resp);
                                     ins.close();
@@ -111,34 +132,34 @@ class SendPending extends Form implements Runnable, Tandem
                     catch(Exception e)
                     {
                           err = e.getMessage();
-                          e.printStackTrace();
-//                        Alert al    =   new Alert(e.getMessage(), "Failed to submit to " + u, null, AlertType.ERROR);
-//                        al.setTimeout(Alert.FOREVER);
-//                        Display.getDisplay(mama).setCurrent(al);
-                        --successes;
+                          label.setLabel(err);
+                          label.setText("Failed to submit to " + u);
                     }
+                    --tries;
                 }
-                if(successes == 0)
+                if(them.size() != 0)
                 {
                     label.setLabel("Message sending failed.");
                     label.setText(err + " Failed to submit after " + Integer.toString(urls.size()) + " attempts.");
+                    throw new Exception(err + " Failed to submit after " + Integer.toString(urls.size()) + " attempts.");
                 }
                 else
                 {
                     label.setLabel("Sent!");
-                    label.setText("All pending submissions have been sent. Active links: " + Integer.toString(successes));
+                    label.setText("All pending submissions have been sent. " + Integer.toString(them.size()) + " left.");
+                    break;
                 }
-                --tries;
             }
         }
         catch(Exception e)
         {
-            e.printStackTrace();
-            Stack them = app.getPending();
+            //  e.printStackTrace();
+            Stack us = app.getPending();
             label.setLabel("Error in Sending");
-            label.setText(Integer.toString(them.size()) + " submissions were not sent due to error: " + e.toString());
+            label.setText(Integer.toString(us.size()) + " submissions were not sent due to error: " + e.toString());
+            try{this.addCommand(retry);}catch(Exception ex){}
         }
-        if(prev == null) return;
+        app.savePending(them);
         Display disp = Display.getDisplay(mama);
         disp.flashBacklight(5000);
         disp.vibrate(1000);
@@ -157,40 +178,22 @@ class SendPending extends Form implements Runnable, Tandem
         {
             Display.getDisplay(mama).setCurrent(prev);
         }
-        prev = null;
+        //  prev = null;
+        running = false;
     }
 
-    public void sendPending(Alert al)
+    public boolean sendPending()
     {
         Stack them = app.getPending();
-        if(them.size() < 1)
-        {
-            if(prev != null)
-            {
-                if(al != null)
-                    Display.getDisplay(mama).setCurrent(al, prev);
-                else
-                {
-                    if(prev != null)
-                        Display.getDisplay(mama).setCurrent(prev);
-                }
-            }
-            return;
-        }
-        if(prev != null)
-        {
-            if(al != null)
-                Display.getDisplay(mama).setCurrent(al, this);
-            else
-                Display.getDisplay(mama).setCurrent(this);
-        }
-        Thread thd = new Thread(this);
-        thd.start();
+        if(them.size() < 1) return false;
+        if(current == null) current = new Thread(this);
+        if(!running) current.start();
+        return running;
     }
 
     public void handOver(Tandem t, Displayable d)
     {
-        prev = d;
+        //  prev = d;
     }
 
     public Alert informationAlert()
@@ -199,6 +202,12 @@ class SendPending extends Form implements Runnable, Tandem
         Alert al = new Alert(title, Integer.toString(them.size()) + " pending.", null, AlertType.INFO);
         al.setTimeout(Alert.FOREVER);
         return al;
+    }
+
+    public Displayable sendingProcess(Displayable p)
+    {
+        prev    =   p;
+        return this;
     }
 }
 
@@ -265,19 +274,25 @@ class App
 {
     private Vector urls, forms;
     private Stack pending;
-    private Restartable restbl;
+    //  private Restartable restbl;
     private Displayable dispy;
-    private String xml;
+    private String status;
     private Alarm alarm;
     private MIDlet mama;
     private SendPending sender;
+    private UpdaterQuestion updater;
 
     public App(MIDlet m)
     {
         mama    =   m;
         urls    =   new Vector();
-        forms   =   new Vector();
         alarm   =   Alarm.getAlarm(m);
+        status  =   null;
+    }
+
+    public void setUpdater(UpdaterQuestion uq)
+    {
+        updater = uq;
     }
 
     public void setSender(SendPending s)
@@ -290,57 +305,78 @@ class App
         return sender;
     }
 
-    public String status()
-    {
-        byte[] gotStatus = {};
-        try
-        {
-            RecordStore verstat = RecordStore.openRecordStore("metadata", true);
-            gotStatus           = new byte[verstat.getRecordSize(1)];
-            verstat.getRecord(1, gotStatus, 0);
-            verstat.closeRecordStore();
-        }
-        catch(Exception rse)
-        {
-            rse.printStackTrace();
-        }
-        return new String(gotStatus);
-    }
-
     public String version()
     {
-        byte[] status   = {'o', 'r', 'i', 'g', 'i', 'n', 'a', 'l'};
-        String version  =  "default";
+        String ans = mama.getAppProperty("MIDlet-Jar-SHA1");
+        if(ans == null) return "original";
+        return ans;
+    }
+
+    public void status(String s)
+    {
+        byte[] them = s.getBytes();
         try
         {
-            RecordStore rs = RecordStore.openRecordStore("metadata", true);
-            status = new byte[rs.getRecordSize(1)];
-            rs.getRecord(1, status, 0);
+            RecordStore rs  =   RecordStore.openRecordStore("metadata", true);
+            try
+            {
+                rs.setRecord(1, them, 0, them.length);
+            }
+            catch(InvalidRecordIDException irie)
+            {
+                rs.addRecord(them, 0, them.length);
+            }
             rs.closeRecordStore();
         }
-        catch(RecordStoreException rse) {}
-        version = mama.getAppProperty("MIDlet-Jar-SHA1");
-        if(version == null) version = "default";
-        return new String(status) + ":" + version;
+        catch(RecordStoreException rse)
+        {
+            //  rse.printStackTrace();
+        }
+    }
+
+    public String date()
+    {
+        String ans = mama.getAppProperty("MIDlet-Creation-Date");
+        if(ans == null) return "original";
+        return ans;
+    }
+
+    public String status()
+    {
+        if(status == null)
+        {
+            try
+            {
+                RecordStore verstat =   RecordStore.openRecordStore("metadata", true);
+                status              =   new String(verstat.getRecord(1));
+                verstat.closeRecordStore();
+            }
+            catch(Exception e)
+            {
+                //  e.printStackTrace();
+                return "default";
+            }
+        }
+        return status;
     }
 
     public void initialiseForms(String x, Stack pnd, Restartable r, Displayable d)
     {
-        pending =   pnd;
-        restbl  =   r;
-        dispy   =   d;
-        xml     =   x;
+        pending         =   pnd;
+        //  restbl  =   r;
+        dispy           =   d;
+        forms           =   new Vector();
+        byte[] xmlBytes =   x.getBytes();
         SAXParserFactory spf = SAXParserFactory.newInstance();
         try
         {
             SAXParser prs           = spf.newSAXParser();
-            UpdateXMLHandler uxh    = new UpdateXMLHandler(r, d, alarm);
-            uxh.setApp(this);
-            prs.parse(new ByteArrayInputStream(xml.getBytes()), uxh);
+            UpdateXMLHandler uxh    = new UpdateXMLHandler(this, r, d, alarm, false);
+            prs.parse(new ByteArrayInputStream(xmlBytes), uxh);
         }
         catch(Exception e)
         {
-            e.printStackTrace();
+            //  e.printStackTrace();
             Alert al = new Alert("XML Parser Failure", e.getMessage(), null, AlertType.ERROR);
             al.setTimeout(Alert.FOREVER);
             Display.getDisplay(r.asMIDlet()).setCurrent(al, dispy);
@@ -379,12 +415,20 @@ class App
         try
         {
             RecordStore pd = RecordStore.openRecordStore("pending", true);
-            pd.setRecord(1, (x.toString() + "</pending>").getBytes(), 0, x.length());
+            byte[] data    = (x.toString() + "</pending>").getBytes();
+            try
+            {
+                pd.setRecord(1, data, 0, data.length);
+            }
+            catch(InvalidRecordIDException irie)
+            {
+                pd.addRecord(data, 0, data.length);
+            }
             pd.closeRecordStore();
         }
         catch(Exception e)
         {
-            e.printStackTrace();
+            //  e.printStackTrace();
         }
     }
 
@@ -436,11 +480,12 @@ class AppForm extends Vector implements CommandListener, Tandem
     private Vector allInputs;
     private Form dispForm;
     
-    public AppForm(String i, String p, boolean r)
+    public AppForm(Displayable pr, String i, String p, boolean r)
     {
         id          =   i;
         responds    =   r;
         prepend     =   p;
+        prev        =   pr;
         send        =   new Command("Send", Command.OK, 0);
         back        =   new Command("Back", Command.BACK, 1);
         subm        =   new Submission(this);
@@ -485,7 +530,11 @@ class AppForm extends Vector implements CommandListener, Tandem
                     allInputs.addElement(inputs[notJ]);
                     Item got = inputs[notJ].getField();
                     if(got != null)
+                    {
+                        dispForm.append(got.getLabel());
+                        got.setLabel("");
                         dispForm.append(got);
+                    }
                 }
                 qn.handOver(this, dispForm);
             }
@@ -544,8 +593,15 @@ class AppForm extends Vector implements CommandListener, Tandem
             themAll.push(subm);
             application.savePending(themAll);
             SendPending sender = application.getSender();
-            sender.sendPending(null);
-            return;
+            Alert alt          = sender.informationAlert();
+            if(sender.sendPending())
+            {
+                Display.getDisplay(mama).setCurrent(alt, sender.sendingProcess(prev));
+            }
+            else
+            {
+                Display.getDisplay(mama).setCurrent(alt, prev);
+            }
         }
     }
 }
@@ -715,7 +771,6 @@ class HelpQuestion extends Question implements HasAnswer, ItemCommandListener
 
     public void commandAction(Command c, Item it)
     {
-        new Exception("Merdisme").printStackTrace();
         int seld                =   chg.getSelectedIndex();
         QuestionAnswerPair qa   =   (QuestionAnswerPair) helpItems.elementAt(seld);
         if(qa.executes())
@@ -726,7 +781,7 @@ class HelpQuestion extends Question implements HasAnswer, ItemCommandListener
             }
             catch(Exception e)
             {
-                e.printStackTrace();
+                //  e.printStackTrace();
                 Alert al = new Alert("Failure", e.getMessage(), null, AlertType.ERROR);
                 Display.getDisplay(midlet.asMIDlet()).setCurrent(al);
             }
@@ -1011,7 +1066,7 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
         start           =   new Command("Start", Command.OK, 0);
         //  counter.setText("To begin counting, press the Start button.");
 
-        reset();
+        //  reset();
     }
 
     public String tag()
@@ -1042,6 +1097,7 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
 
     public void handOver(Tandem t, Displayable cur)
     {
+        reset();
         moi =   cur;
         cur.addCommand(start);
         cur.setCommandListener(this);
@@ -1073,7 +1129,7 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
         if(Thread.currentThread() != currentThread)
             return;
         //  Because we stupidly call this every time the app starts up. I don’t have the time to re-design it.
-        try {moi.removeCommand(inc);} catch(Exception e) {e.printStackTrace();}
+        try {moi.removeCommand(inc);} catch(Exception e) {/*e.printStackTrace();*/}
         stillCounting = false;
         commandAction(null, moi);
     }
@@ -1094,7 +1150,7 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
         }
         else
         {
-            try{moi.removeCommand(inc);}catch(Exception e){ e.printStackTrace();}   //  Because we foolishly over-use this in different situations.
+            try{moi.removeCommand(inc);}catch(Exception e){ /*e.printStackTrace();*/}   //  Because we foolishly over-use this in different situations.
             alarm.ring();
             interrupted = currentThread;
             Alert sofar = new Alert("Result: " + Integer.toString(count), Integer.toString(count) + " counts.\n\n" + note, null, AlertType.INFO);
@@ -1133,7 +1189,7 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
         counter     = new StringItem(title, "reset()");
         alarm       = alm;
         hidden      = false;
-        reset();
+        //  reset();
     }
 
     public String validate()
@@ -1231,6 +1287,7 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
 
     public void handOver(Tandem t, Displayable cur)
     {
+        reset();
         moi = cur;
         cur.addCommand(start);
         cur.setCommandListener(this);
@@ -1255,31 +1312,23 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
     private Restartable midlet;
     private Displayable prev;
     private App describedApp;
-    private String upgurl;
+    private String upgurl, newVersion;
     private AppForm curform;
-    public boolean isUpgrade, curBold, curItalic, curUnderline;
+    public boolean refresh, isUpgrade, curBold, curItalic, curUnderline;
     private Alarm   alarm;
     private String curId, runChars, curTitle, curQn, curChoice, curVal, curSecs, curLink;
     private Vector helps, choices;
 
-    public UpdateXMLHandler(Restartable r, Displayable d, Alarm alm)
+    public UpdateXMLHandler(App a, Restartable r, Displayable d, Alarm alm, boolean ref)
     {
         midlet          = r;
+        describedApp    = a;
         prev            = d;
+        refresh         = ref;
         isUpgrade       = false;
         alarm           = alm;
         helps           = new Vector(5, 5);
         choices         = new Vector(5, 5);
-    }
-
-    public void setApp(App a)
-    {
-        describedApp = a;
-    }
-
-    public App getApp()
-    {
-        return describedApp;
     }
 
     public void commandAction(Command c, Displayable d)
@@ -1290,7 +1339,7 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
         }
         catch(ConnectionNotFoundException cnfe)
         {
-            cnfe.printStackTrace();
+            //  cnfe.printStackTrace();
             Alert al = new Alert("Upgrade Failed", "Could not successfully fetch the system upgrade from " + upgurl, null, AlertType.ERROR);
             al.setTimeout(Alert.FOREVER);
             Display.getDisplay(midlet.asMIDlet()).setCurrent(al, prev);
@@ -1306,7 +1355,13 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
             isUpgrade   =   true;
             return;
         }
-        if(qnom.equalsIgnoreCase("f"))
+        if(qnom.equalsIgnoreCase("update"))
+        {
+            newVersion  =   attr.getValue("v");
+            if(newVersion != null)
+                describedApp.status(newVersion);
+        }
+        else if(qnom.equalsIgnoreCase("f"))
         {
             helps.removeAllElements();
             String resp =   attr.getValue("r");
@@ -1315,7 +1370,7 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
             if(prep == null) prep = "";
             curQn   = attr.getValue("id");
             if(curQn == null) curQn = "";
-            curform = new AppForm(curQn, prep, !resp.equals("no"));
+            curform = new AppForm(prev, curQn, prep, !resp.equals("no"));
             describedApp.addForm(curform);
         }
         else if(qnom.equalsIgnoreCase("u"))
@@ -1398,9 +1453,10 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
         if(qnom.equalsIgnoreCase("forms"))
         {
             String updtxt = "Update Questionnaire";
-            curform = new AppForm(updtxt, "", false);
+            curform = new AppForm(prev, updtxt, "", false);
             q = new UpdaterQuestion(midlet, prev, describedApp, alarm, updtxt);
             describedApp.addForm(curform);
+            describedApp.setUpdater((UpdaterQuestion) q);
         }
         else if(qnom.equalsIgnoreCase("i") || qnom.equalsIgnoreCase("x"))
         {
@@ -1416,7 +1472,7 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
         }
         else if(qnom.equalsIgnoreCase("o"))
         {
-            choices.addElement(new QuestionAnswerPair(curVal, runChars));
+            choices.addElement(new QuestionAnswerPair(runChars, curVal));
         }
         else if(qnom.equalsIgnoreCase("date"))
         {
@@ -1424,7 +1480,7 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
         }
         else if(qnom.equalsIgnoreCase("h"))
         {
-            helps.addElement(new QuestionAnswerPair(runChars, curTitle));
+            helps.addElement(new QuestionAnswerPair(curTitle, runChars));
         }
         else if(qnom.equalsIgnoreCase("ph"))
         {
@@ -1487,15 +1543,17 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
     private VHTCodeQuestion vhtCode;
     private Command update;
     private App application;
+    private boolean updating;
     
     public UpdaterQuestion(Restartable m, Displayable d, App a, Alarm alm, String text)
     {
         super(m, d);
         report      = new StringItem(text, "");
-        upx         = new UpdateXMLHandler(midlet, prev, alm);
+        upx         = new UpdateXMLHandler(a, midlet, prev, alm, false);
         vhtCode     = new VHTCodeQuestion(m, d);
         update      = new Command("Update", Command.OK, 1);
         application = a;
+        updating    = false;
         reset();
     }
 
@@ -1530,6 +1588,9 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
                 Display.getDisplay(midlet.asMIDlet()).setCurrent(al, d);
                 return;
             }
+            if(updating) return;
+            updating = true;
+            mother.displayForm().removeCommand(update);
             Thread th = new Thread(this);
             th.start();
         }
@@ -1552,6 +1613,7 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
     private boolean recordWhatWeHave(byte[] them)
     {
         String stuff = new String(them);
+
         if(stuff.substring(0, 2).equals("OK"))
             return true;
         try
@@ -1562,29 +1624,34 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
         }
         catch(Exception e)
         {
-            e.printStackTrace();
+            //  e.printStackTrace();
         }
         if(upx.isUpgrade)
         {
             Alert upgal = new Alert("Updates!", "A new version of the application is available. Please accept the update.", null, AlertType.INFO);
             upgal.setTimeout(Alert.FOREVER);
             upgal.setCommandListener(upx);
-            Display.getDisplay(midlet.asMIDlet()).setCurrent(upgal);
+            Display.getDisplay(midlet.asMIDlet()).setCurrent(upgal, prev);
         }
         else
         {
             try
             {
-                //  TODO: Make sure it doesn’t throw this error where the record doesn’t exist.
-                //  TODO: Do the above for every RMS access in the code base.
-                //  TODO: Sometimes the Alert-leaving button doesn’t work on just-before-update?
                 RecordStore recs = RecordStore.openRecordStore("descr", true);
-                recs.setRecord(1, them, 0, them.length);
+                try
+                {
+                    recs.setRecord(1, them, 0, them.length);
+                }
+                catch(InvalidRecordIDException irie)
+                {
+                    //  irie.printStackTrace();
+                    recs.addRecord(them, 0, them.length);
+                }
                 recs.closeRecordStore();
             }
             catch(RecordStoreException rse)
             {
-                rse.printStackTrace();
+                //  rse.printStackTrace();
             }
         }
         return false;
@@ -1595,7 +1662,6 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
         nxt       = cur;
         tandem    = t;
         mother.displayForm().addCommand(update);
-        upx.setApp(originalApp);
         cur.setCommandListener(this);
         reset();
     }
@@ -1603,6 +1669,7 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
     public void run()
     {
         String[] urls = {"http://localhost:3000",
+                         "http://inscale.herokuapp.com",
                          "http://inscale.malariaconsortium.org",
                          "http://inscale.malariaconsortium.org:3000"};
         int wins          = urls.length;
@@ -1614,29 +1681,34 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
         {
             try
             {
-                String realU    = urls[notI].concat("/system/get_latest/inscale/" + gotVersion + "/" + new String(gotStatus) + "?vht=" + vhtCode.getAnswer());
+                String realU    = urls[notI].concat("/system/get_latest/inscale/" + gotVersion + "/" + gotStatus + "?vht=" + vhtCode.getAnswer());
                 report.setText("Trying " + realU + " ...");
                 urlList.append(realU);
                 HttpConnection htc = (HttpConnection) Connector.open(realU);
                 InputStream str    = htc.openInputStream();
-                dest               = new byte[str.available()];
+                dest               = new byte[(int) htc.getLength()];
                 str.read(dest);
+                str.close();
                 htc.close();
                 if(recordWhatWeHave(dest))
                 {
                     Alert al = new Alert("Up-to-date", "Everything you have is up-to-date.", null, AlertType.CONFIRMATION);
                     al.setTimeout(Alert.FOREVER);
-                    Display.getDisplay(midlet.asMIDlet()).setCurrent(al);
+                    Display.getDisplay(midlet.asMIDlet()).setCurrent(al, prev);
+                    break;
                 }
                 else
                 {
                     if(! upx.isUpgrade)
                     {
-                        //  TODO: Test this. Make sure that updated applications correctly identify as such.
+                        //  TODO: Review this. There is thrown an error due to an addCommand that follows it.
                         midlet.restart();
                     }
                 }
-                report.setText(report.getText() + " ... succeeded!");
+                report.setText(report.getText() + " ... succeeded!\n\n[" + new String(dest) + "]");
+//                Alert al = new Alert("Updated", "You now have a new questionnaire version: " + application.status(), null, AlertType.CONFIRMATION);
+//                al.setTimeout(Alert.FOREVER);
+//                Display.getDisplay(midlet.asMIDlet()).setCurrent(al, prev);
                 break;
             }
             catch(IOException e)
@@ -1647,12 +1719,15 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
         }
         if(wins < 1)
         {
-            report.setLabel("Updates Failed");
-            report.setText(Integer.toString(urls.length) + " failed attempts to update from " + Integer.toString(urls.length) + " different URLs.\n\n" + urlList);
-//            Alert al = new Alert("Updates Failed", Integer.toString(urls.length) + " failed attempts to update from " + Integer.toString(urls.length) + " different URLs did not succeed.", null, AlertType.ERROR);
-//            al.setTimeout(Alert.FOREVER);
-//            Display.getDisplay(midlet.asMIDlet()).setCurrent(al);
+            String tt = "Updates Failed", bt = Integer.toString(urls.length) + " failed attempts to update from " + Integer.toString(urls.length) + " different URLs.\n\n" + urlList;
+            report.setLabel(tt);
+            report.setText(bt);
+            Alert al = new Alert(tt, bt, null, AlertType.ERROR);
+            al.setTimeout(Alert.FOREVER);
+            Display.getDisplay(midlet.asMIDlet()).setCurrent(al, prev);
         }
+        mother.displayForm().addCommand(update);
+        updating = false;
     }
 }
 
@@ -1796,7 +1871,7 @@ class DateQuestion extends Question implements Tandem, HasAnswer
 
     public String getAnswer()
     {
-        return Long.toString(dateField.getDate().getTime(), 16);
+        return Long.toString(dateField.getDate().getTime() / 1000, 16);
     }
 }
 
@@ -1887,24 +1962,27 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
     private String appdescr;
     private MeekList mainMenu;
     private Command pending, quitbut, /*formChoice,*/ version;
-    private Stack already = new Stack();
+    private Stack already;
     private App application;
-    SendPending sender;
+    private SendPending sender;
+    private boolean onceBefore;
 
     private boolean getWhatWeHave()
     {
         try
         {
             RecordStore rs = RecordStore.openRecordStore("descr", true);
-            byte[] them    = new byte[rs.getRecordSize(1)];
-            if(rs.getRecord(1, them, 0) > 0)
-                appdescr = new String(them);
+            byte[] ans     = rs.getRecord(1);
             rs.closeRecordStore();
-            return true;
+            if(ans != null)
+            {
+                appdescr = new String(ans);
+                return true;
+            }
         }
-        catch(RecordStoreException rse)
+        catch(RecordStoreException e)
         {
-            rse.printStackTrace();
+            //  e.printStackTrace();
         }
         try
         {
@@ -1916,7 +1994,7 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         }
         catch(Exception e)
         {
-            e.printStackTrace();
+            //  e.printStackTrace();
             appdescr = "<app>\n    <urls>\n        <u href=\"http://localhost:3000/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org:3000/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org:3000/record/\" />\n        <u href=\"sms://+8779\" />\n    </urls>\n    <forms>\n        <f id=\"Weekly Report\" pre=\"vht \">\n            <t />\n            <vc />\n            <date>Start date:</date>\n            <few>\n                <i id=\"male\">Number of male children (SEX M):</i>\n                <i id=\"fem\">Number of female children (SEX F):</i>\n                <i id=\"rdtp\">Number of RDT results positive (+):</i>\n                <i id=\"rdtn\">Number of RDT results negative (-):</i>\n                <i id=\"diar\">Number of children with diarrhoea:</i>\n                <i id=\"fastb\">Number of children with fast breathing:</i>\n                <i id=\"fever\">Number of children with fever:</i>\n                <i id=\"danger\">Number of children with danger sign:</i>\n                <i id=\"treated\">Number of children treated within 24 hours:</i>\n                <i id=\"ors\">Number treated with ORS:</i>\n                <i id=\"zinc12\">Number treated with Zinc 1/2 tablet:</i>\n                <i id=\"zinc\">Number treated with Zinc 1 tablet:</i>\n                <i id=\"amoxr\">Number treated with Amoxicillin Red:</i>\n                <i id=\"amoxg\">Number treated with Amoxicillin Green:</i>\n                <i id=\"coary\">Number treated with ACT - Coartem Yellow:</i>\n                <i id=\"coarb\">Number treated with ACT - Coartem Blue:</i>\n                <i id=\"recart\">Number treated with Rectal Artesunate (total):</i>\n                <i id=\"ref\">Number of children referred:</i>\n                <i id=\"death\">Number of children who died:</i>\n                <i id=\"mnew\">Number of male newborns (SEX M):</i>\n                <i id=\"fnew\">Number of female newborns (SEX F):</i>\n                <i id=\"hv1\">Number of home visits Day 1:</i>\n                <i id=\"hv3\">Number of home visits Day 3:</i>\n                <i id=\"hv7\">Number of home visits Day 7:</i>\n                <i id=\"newbdanger\">Number of newborns with danger signs:</i>\n                <i id=\"newbref\">Number of newborns referred:</i>\n                <i id=\"yellow\">Number of children with Yellow MUAC:</i>\n                <i id=\"red\">Number of children with Red MUAC/Oedema:</i>\n            </few>\n            <int>\n                <x id=\"recartbal\">Rectal Artesunate balance:</x>\n                <x id=\"orsbal\">ORS balance:</x>\n                <x id=\"zincbal\">Zinc balance:</x>\n                <x id=\"yactbal\">Yellow ACT balance:</x>\n                <x id=\"bactbal\">Blue ACT balance:</x>\n                <x id=\"ramoxbal\">Red Amoxicillin balance:</x>\n                <x id=\"gamoxbal\">Green Amoxicillin balance:</x>\n                <x id=\"rdtbal\">RDT balance:</x>\n            </int>\n            <choice t=\"Pairs of gloves balance\" id=\"glvbal\">\n                <o v=\"MT5\">5 pairs or more</o>\n                <o v=\"LT5\">Less than 5 pairs</o>\n            </choice>\n        </f>\n        <f id=\"Respiratory Timer\" r=\"no\">\n            <pulser secs=\"60\" t=\"Respiratory Timer\">Please note the number of breaths per minute.</pulser>\n        </f>\n        <f id=\"RDT Timer\" r=\"no\">\n            <cd secs=\"900\" t=\"RDT Countdown Timer\">15 minutes have elapsed. Please check and record the results.</cd>\n        </f>\n    </forms>\n</app>";
         }
         return false;
@@ -1927,9 +2005,10 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         try
         {
             RecordStore rs = RecordStore.openRecordStore("pending", true);
-            byte[] pends   = new byte[rs.getRecordSize(1)];
-            rs.getRecord(1, pends, 0);
+            byte[] pends   = rs.getRecord(1);
             rs.closeRecordStore();
+            if(pends == null)
+                return;
             SAXParserFactory spf = SAXParserFactory.newInstance();
             SAXParser parser     = spf.newSAXParser();
             PendingMessages pnd  = new PendingMessages(already, application);
@@ -1937,13 +2016,16 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         }
         catch(Exception e)
         {
-            e.printStackTrace();
+            //  e.printStackTrace();
         }
     }
 
     private String loadDescription()
     {
-        getWhatWeHave();
+        if(getWhatWeHave())
+        {
+            //  We are using from memory.
+        }
         return appdescr;
     }
 
@@ -1958,6 +2040,21 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
 
     public void startApp()
     {
+        mainMenu        = new MeekList(this, "inSCALE", Choice.EXCLUSIVE | Choice.IMPLICIT | Choice.TEXT_WRAP_OFF);
+        pending         = new Command("Pending", Command.OK, 4);
+        quitbut         = new Command("Quit", Command.EXIT, 0);
+        //  formChoice      = new Command("Run", Command.OK, 4);
+        version         = new Command("Version Details", Command.HELP, 1);
+        application     = new App(this);
+        sender          = new SendPending(mainMenu, this, application);
+        already         = new Stack();
+        onceBefore      = false;
+        application.setSender(sender);
+        this.loadPending();
+        mainMenu.addCommand(pending);
+        mainMenu.addCommand(quitbut);
+        mainMenu.addCommand(version);
+        mainMenu.setCommandListener(this);
         restart();
     }
 
@@ -1968,25 +2065,28 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
 
     public void restart()
     {
-        mainMenu        = new MeekList(this, "inSCALE", Choice.EXCLUSIVE | Choice.IMPLICIT | Choice.TEXT_WRAP_OFF);
-        pending         = new Command("Pending", Command.OK, 4);
-        quitbut         = new Command("Quit", Command.EXIT, 0);
-        //  formChoice      = new Command("Run", Command.OK, 4);
-        version         = new Command("Version Details", Command.HELP, 1);
-        application     = new App(this);
-        sender          = new SendPending(this, application);
-        application.setSender(sender);
-        this.loadPending();
+        if(onceBefore)
+        {
+            Alert quitter = new Alert("Restart", "The recent update (" + application.status() + ") requires a restart.", null, AlertType.INFO);
+            quitter.setTimeout(Alert.FOREVER);
+            final MIDlet me = this;
+            quitter.setCommandListener(new CommandListener()
+            {
+                public void commandAction(Command c, Displayable d)
+                {
+                    me.notifyDestroyed();
+                }
+            });
+            Display.getDisplay(me).setCurrent(quitter, mainMenu);
+            return;
+        }
         mainMenu.deleteAll();
-        mainMenu.addCommand(pending);
-        mainMenu.addCommand(quitbut);
-        mainMenu.addCommand(version);
-        mainMenu.setCommandListener(this);
         String descr = this.loadDescription();
         application.initialiseForms(descr, already, this, mainMenu);
         paint(mainMenu, application.getForms());
         mainMenu.setSelectedIndex(0, true);
         Display.getDisplay(this).setCurrent(mainMenu);
+        onceBefore = true;
     }
 
     public void commandAction(Command c, Displayable d)
@@ -1998,14 +2098,21 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         else if(c == pending)
         {
             sender.handOver(mainMenu, d);
-            sender.sendPending(sender.informationAlert());
+            Alert alt   =   sender.informationAlert();
+            if(sender.sendPending())
+            {
+                Display.getDisplay(this).setCurrent(alt, sender.sendingProcess(d));
+            }
+            else
+            {
+                Display.getDisplay(this).setCurrent(alt, d);
+            }
         }
         else if(c == version)
         {
-            String qstat = application.version();
-            String v = this.getAppProperty("MIDlet-Jar-SHA1");
-            if(v == null) v = "original";
-            Alert al = new Alert("Version and Status", "App generation: 2.0 (code name 'Karin')\nApp version: " + v + "\nQuestionnaire status: " + new String(qstat), null, AlertType.INFO);
+            String qstat = application.status(),
+                   vers  = /*   application.version() */ application.date();
+            Alert al = new Alert("Version and Status", "App version: 2.0 (" + vers + ")\nQuestionnaire status: " + qstat, null, AlertType.INFO);
             al.setTimeout(Alert.FOREVER);
             Display.getDisplay(this).setCurrent(al);
         }

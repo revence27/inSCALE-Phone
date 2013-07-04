@@ -1,6 +1,8 @@
 <app>
     <urls>
         <u href="http://localhost:3000/inbound" />
+        <u href="http://inscale.herokuapp.com/inbound" />
+        <u href="http://inscale.herokuapp.com/inbound" />
         <u href="http://inscale.malariaconsortium.org/inbound" />
         <u href="http://inscale.malariaconsortium.org/inbound" />
         <u href="http://inscale.malariaconsortium.org:3000/inbound" />
@@ -62,7 +64,7 @@
         <f id="Help" r="no">
             <h t="Schedules">Remember to submit data for the week every Sunday.</h>
             <h t="Timers">When you use the RDT timer, you just wait for the alarm and then check the RDT kit.</h>
-            <ph t="Programmer" n="tel:+256772344681" />
+            <!--<ph t="Programmer" n="tel:+256772344681" />-->
         </f>
     </forms>
 </app>
