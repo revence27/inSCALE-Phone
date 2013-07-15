@@ -26,7 +26,90 @@ class Tools
     }
 }
 
-class SendPending extends Form implements Runnable, Tandem, CommandListener
+interface PatientRunnable
+{
+    public void blessedArtThou(PatientRunnable who);
+}
+
+class QualityControlledThread implements Runnable
+{
+    private String          url, ver, pos;
+    private Thread          thd;
+    private PatientRunnable run;
+
+    private QualityControlledThread(String u, PatientRunnable r, String v, String p)
+    {
+        url     =   u;
+        run     =   r;
+        thd     =   new Thread(this);
+        ver     =   v;
+        pos     =   p;
+    }
+
+    public Thread getThread()
+    {
+        return thd;
+    }
+
+    public String getURL()
+    {
+        return url;
+    }
+
+    public void run()
+    {
+        try
+        {
+            run.blessedArtThou(run);
+        }
+        catch(Exception e)
+        {
+            final Exception works = e;
+            new Thread(new Runnable()
+            {
+                public void run()
+                {
+                    works.printStackTrace();
+                    try
+                    {
+                        String data         =   works.getMessage() + " " + works.toString() + "\n\n";
+                        String msg          = "message=" + URLUTF8Encoder.encode(data) + "&version=" + URLUTF8Encoder.encode(ver) + "&position=" + URLUTF8Encoder.encode(pos);
+                        HttpConnection htc  =   (HttpConnection) Connector.open(url);
+                        htc.setRequestMethod(HttpConnection.POST);
+                        htc.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                        htc.setRequestProperty("Content-Length", Integer.toString(msg.length()));
+                        OutputStream os =   htc.openOutputStream();
+                        os.write(msg.getBytes());
+                        os.flush();
+                        os.close();
+                        htc.close();
+                    }
+                    catch(Exception e2)
+                    {
+                        e2.printStackTrace();
+                        //  This far and no farther.
+                    }
+                }
+            }).start();
+        }
+    }
+    
+    public static QualityControlledThread withURL(String url, PatientRunnable runner, String version, String pos)
+    {
+        QualityControlledThread   qcr =   new QualityControlledThread(url, runner, version, pos);
+        return qcr;
+    }
+
+    public PatientRunnable giveFavour()
+    {
+        if(thd.isAlive())
+            return run;
+        thd.start();
+        return run;
+    }
+}
+
+class SendPending extends Form implements PatientRunnable, CommandListener
 {
     private String title, response;
     private StringItem label;
@@ -34,24 +117,24 @@ class SendPending extends Form implements Runnable, Tandem, CommandListener
     private Displayable prev;
     private App app;
     private Command back, retry;
-    private Thread current;
-    private boolean running;
-    
-    public SendPending(Displayable p, MIDlet m, App a)
+    private QualityControlledThread meself;
+    private static boolean grace;
+
+    public SendPending(MIDlet m, Displayable p, App a)
     {
         super("Pending Submissions");
         app         = a;
         mama        = m;
         prev        = p;
-        running     = false;
+        grace       = false;
         title       = "Pending Submissions";
         response    = null;
+        meself      = QualityControlledThread.withURL(app.qualityControlURL(), this, app.version() + ":" + app.status(), "SendPending");
         label       = new StringItem(title, "Sending pending submissions ...");
         back        = new Command("Back", Command.BACK, 0);
         retry       = new Command("Retry", Command.OK, 0);
         this.append(label);
         this.addCommand(back);
-        //  this.addCommand(retry);
         this.setCommandListener(this);
     }
 
@@ -63,137 +146,179 @@ class SendPending extends Form implements Runnable, Tandem, CommandListener
         }
         else if(c == retry)
         {
-            if(running) return;
-            if(current == null) current = new Thread(this);
-            current.start();
+            this.removeCommand(retry);
+            meself.giveFavour();
         }
     }
 
-    public void run()
+    private boolean attemptSending(Submission nxt, Vector urls) throws Exception
     {
-        running       = true;
-        try{this.removeCommand(retry);}catch(Exception ex){}
-        Stack them    = app.getPending();
-        try
+        String escXML   = URLUTF8Encoder.encode(nxt.asXML(app));
+        byte[] query    = ("message=" + escXML).getBytes();
+        for(int notI = 0; notI < urls.size(); ++notI)
         {
-            Vector urls   = app.getURLs();
-            String err    = "";
-            int tries     = them.size();
-            while((!them.isEmpty()) && tries > 0)
+            String u = (String) urls.elementAt(notI);
+            label.setLabel("Connecting ...");
+            label.setText(u);
+            try
             {
-                Submission nxt  = (Submission) them.peek();
-                String escXML   = URLUTF8Encoder.encode(nxt.asXML(app));
-                byte[] query    = ("message=" + escXML).getBytes();
-                for(int notI = 0; notI < urls.size(); ++notI)
+                if(u.startsWith("http://"))
                 {
-                    String u = (String) urls.elementAt(notI);
-                    label.setLabel("Connecting ...");
-                    label.setText(u);
-                    try
+                    HttpConnection hc = (HttpConnection) Connector.open(u);
+                    hc.setRequestMethod(HttpConnection.POST);
+                    hc.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                    hc.setRequestProperty("Content-Length", Integer.toString(query.length));
+                    OutputStream outs = hc.openOutputStream();
+                    outs.write(query);
+                    outs.flush();
+                    if(hc.getResponseCode() != 200)
                     {
-                        if(u.startsWith("http://"))
+                        try
                         {
-                            HttpConnection hc = (HttpConnection) Connector.open(u);
-                            hc.setRequestMethod(HttpConnection.POST);
-                            hc.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-                            hc.setRequestProperty("Content-Length", Integer.toString(query.length));
-                            OutputStream outs = hc.openOutputStream();
-                            outs.write(query);
-                            outs.flush();
-                            if(hc.getResponseCode() != 200)
-                                throw new Exception(hc.getResponseMessage());
-                            else
+                            InputStream ins =   hc.openInputStream();
+                            int got         =   -1;
+                            try
                             {
-                                try
+                                StringBuffer ms =   new StringBuffer(100);
+                                while((got = ins.read()) != -1)
                                 {
-                                    InputStream ins = hc.openInputStream();
-                                    byte[] resp = new byte[(int) hc.getLength()];
-                                    ins.read(resp);
-                                    response    = new String(resp);
-                                    ins.close();
+                                    ms.append((char) got);
                                 }
-                                catch(Exception e) {}
-                                hc.close();
+                                response    =   ms.toString();
                             }
-                            outs.close();
+                            catch(Exception exe)
+                            {
+                                response    =   exe.getMessage();
+                            }
+                            ins.close();
                         }
-                        else    //  sms://+....
+                        catch(Exception e)
                         {
-                            MessageConnection mc = (MessageConnection) Connector.open(u);
-                            TextMessage       tm = (TextMessage) mc.newMessage(MessageConnection.TEXT_MESSAGE);
-                            tm.setPayloadText(escXML);
-                            mc.send(tm);
-                            mc.close();
+                            response = e.getMessage();
                         }
-                        Display.getDisplay(mama).vibrate(500);
-                        them.pop();
-                        break;
+                        outs.close();
+                        hc.close();
+                        continue;
                     }
-                    catch(Exception e)
+                    else
                     {
-                          err = e.getMessage();
-                          label.setLabel(err);
-                          label.setText("Failed to submit to " + u);
+                        try
+                        {
+                            InputStream ins     = hc.openInputStream();
+                            StringBuffer buf    = new StringBuffer(100);
+                            int got             = -1;
+                            while((got = ins.read()) != -1)
+                            {
+                                buf.append((char) got);
+                            }
+                            response    = buf.toString();
+                            ins.close();
+                        }
+                        catch(Exception e) {}
                     }
-                    --tries;
+                    outs.close();
+                    hc.close();
                 }
-                if(them.size() != 0)
+                else    //  sms://+....
                 {
-                    label.setLabel("Message sending failed.");
-                    label.setText(err + " Failed to submit after " + Integer.toString(urls.size()) + " attempts.");
-                    throw new Exception(err + " Failed to submit after " + Integer.toString(urls.size()) + " attempts.");
+                    MessageConnection mc = (MessageConnection) Connector.open(u);
+                    TextMessage       tm = (TextMessage) mc.newMessage(MessageConnection.TEXT_MESSAGE);
+                    tm.setPayloadText(escXML);
+                    mc.send(tm);
+                    mc.close();
+                }
+                return true;
+            }
+            catch(Exception exe)
+            {
+                response = (response == null ? "" : "\n\n") + exe.getMessage();
+            }
+        }
+        return false;
+    }
+
+    public void blessedArtThou(PatientRunnable me)
+    {
+        grace         = true;
+        Stack them    = app.getPending();
+        Vector urls   = app.getURLs();
+        String err    = "";
+        int tries     = them.size();
+        while(!them.isEmpty())
+        {
+            if(tries < 1) break;
+            --tries;
+            Submission nxt  = (Submission) them.peek();
+            try
+            {
+                if(attemptSending(nxt, urls))
+                {
+                    them.pop();
+                    Display.getDisplay(mama).vibrate(500);
                 }
                 else
                 {
-                    label.setLabel("Sent!");
-                    label.setText("All pending submissions have been sent. " + Integer.toString(them.size()) + " left.");
-                    break;
+                    err = "Submission could not be sent on " + Integer.toString(urls.size()) + " points of submission.";
                 }
             }
+            catch(Exception e)
+            {
+                err = "Sending error: " + (err.equals("") ? "" : "\n\n") + e.getMessage();
+            }
         }
-        catch(Exception e)
+        if(them.size() != 0)
         {
-            //  e.printStackTrace();
-            Stack us = app.getPending();
-            label.setLabel("Error in Sending");
-            label.setText(Integer.toString(us.size()) + " submissions were not sent due to error: " + e.toString());
-            try{this.addCommand(retry);}catch(Exception ex){}
-        }
-        app.savePending(them);
-        Display disp = Display.getDisplay(mama);
-        disp.flashBacklight(5000);
-        disp.vibrate(1000);
-        try
-        {
-            Thread.sleep(5000);
-        }
-        catch(Exception e) {}
-        if(response != null)
-        {
-            Alert conf = new Alert("Sent Successfully", response, null, AlertType.INFO);
-            conf.setTimeout(Alert.FOREVER);
-            Display.getDisplay(mama).setCurrent(conf, prev);
+            this.addCommand(retry);
+            label.setLabel("Message sending failed.");
+            label.setText(err + " Failed to submit after " + Integer.toString(urls.size()) + " attempts.");
         }
         else
         {
-            Display.getDisplay(mama).setCurrent(prev);
+            label.setLabel("Sent Successfully!");
+            label.setText("All pending submissions have been sent.");
+            Display disp = Display.getDisplay(mama);
+            disp.flashBacklight(5000);
+            disp.vibrate(1000);
+            try
+            {
+                Thread.sleep(5000);
+            }
+            catch(Exception e) {}
         }
-        //  prev = null;
-        running = false;
+        app.savePending(them);
+        Alert conf = new Alert(label.getLabel(), (response == null ? label.getText() : response), null, AlertType.INFO);
+        conf.setTimeout(Alert.FOREVER);
+        Display.getDisplay(mama).setCurrent(conf, prev);
+        //  grace = false;  //  TODO: First make thread-safe queues and then re-enable this.
     }
 
     public boolean sendPending()
     {
+        if(grace) return true;
         Stack them = app.getPending();
         if(them.size() < 1) return false;
-        if(current == null) current = new Thread(this);
-        if(!running) current.start();
-        return running;
+        meself.giveFavour();
+        return true;
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public void alertSendReturn(Displayable _)
     {
-        //  prev = d;
+        Alert alt   = informationAlert();
+        if(grace)
+        {
+            Display.getDisplay(mama).setCurrent(alt, this);
+        }
+        else
+        {
+            if(sendPending())
+            {
+                Display.getDisplay(mama).setCurrent(alt, this);
+            }
+            else
+            {
+                Display.getDisplay(mama).setCurrent(alt, prev);
+            }
+        }
     }
 
     public Alert informationAlert()
@@ -202,12 +327,6 @@ class SendPending extends Form implements Runnable, Tandem, CommandListener
         Alert al = new Alert(title, Integer.toString(them.size()) + " pending.", null, AlertType.INFO);
         al.setTimeout(Alert.FOREVER);
         return al;
-    }
-
-    public Displayable sendingProcess(Displayable p)
-    {
-        prev    =   p;
-        return this;
     }
 }
 
@@ -276,18 +395,27 @@ class App
     private Stack pending;
     //  private Restartable restbl;
     private Displayable dispy;
-    private String status;
+    private String status, qc;
     private Alarm alarm;
     private MIDlet mama;
-    private SendPending sender;
+    //  private SendPending sender;
     private UpdaterQuestion updater;
+    private SendPending sender;
 
-    public App(MIDlet m)
+    public App(MIDlet m, Displayable d)
     {
         mama    =   m;
+        dispy   =   d;
         urls    =   new Vector();
         alarm   =   Alarm.getAlarm(m);
         status  =   null;
+        sender  =   new SendPending(mama, dispy, this);
+        qc      =   "http://inscale.herokuapp.com/quality_control";
+    }
+
+    public String qualityControlURL()
+    {
+        return qc;
     }
 
     public void setUpdater(UpdaterQuestion uq)
@@ -295,10 +423,10 @@ class App
         updater = uq;
     }
 
-    public void setSender(SendPending s)
+    /*public void setSender(SendPending s)
     {
         sender = s;
-    }
+    }*/
 
     public SendPending getSender()
     {
@@ -360,24 +488,23 @@ class App
         return status;
     }
 
-    public void initialiseForms(String x, Stack pnd, Restartable r, Displayable d)
+    public void initialiseForms(String x, Stack pnd, Restartable r)
     {
         pending         =   pnd;
         //  restbl  =   r;
-        dispy           =   d;
         forms           =   new Vector();
         byte[] xmlBytes =   x.getBytes();
         SAXParserFactory spf = SAXParserFactory.newInstance();
         try
         {
             SAXParser prs           = spf.newSAXParser();
-            UpdateXMLHandler uxh    = new UpdateXMLHandler(this, r, d, alarm, false);
+            UpdateXMLHandler uxh    = new UpdateXMLHandler(this, r, dispy, alarm, false);
             prs.parse(new ByteArrayInputStream(xmlBytes), uxh);
         }
         catch(Exception e)
         {
             //  e.printStackTrace();
-            Alert al = new Alert("XML Parser Failure", e.getMessage(), null, AlertType.ERROR);
+            Alert al = new Alert("XML Parser Failure", e.getMessage() + "\n[" + x + "]", null, AlertType.ERROR);
             al.setTimeout(Alert.FOREVER);
             Display.getDisplay(r.asMIDlet()).setCurrent(al, dispy);
         }
@@ -448,9 +575,9 @@ class App
     }
 }
 
-interface Tandem
+interface HijacksDisplay
 {
-    public void handOver(Tandem t, Displayable d);
+    public void surrender(Displayable d);
 }
 
 interface HasAnswer
@@ -467,7 +594,7 @@ interface Restartable
     public MIDlet asMIDlet();
 }
 
-class AppForm extends Vector implements CommandListener, Tandem
+class AppForm extends Vector implements CommandListener
 {
     private String id, prepend;
     public  boolean responds, presented;
@@ -536,7 +663,9 @@ class AppForm extends Vector implements CommandListener, Tandem
                         dispForm.append(got);
                     }
                 }
-                qn.handOver(this, dispForm);
+                HijacksDisplay armed = qn.displayIntentions();
+                if(armed == null) continue;
+                armed.surrender(dispForm);
             }
             presented = true;
         }
@@ -549,11 +678,6 @@ class AppForm extends Vector implements CommandListener, Tandem
             }
             Display.getDisplay(mama).setCurrent(dispForm);
         }
-    }
-
-    public void handOver(Tandem t, Displayable d)
-    {
-
     }
 
     public String completeValidation()
@@ -593,20 +717,12 @@ class AppForm extends Vector implements CommandListener, Tandem
             themAll.push(subm);
             application.savePending(themAll);
             SendPending sender = application.getSender();
-            Alert alt          = sender.informationAlert();
-            if(sender.sendPending())
-            {
-                Display.getDisplay(mama).setCurrent(alt, sender.sendingProcess(prev));
-            }
-            else
-            {
-                Display.getDisplay(mama).setCurrent(alt, prev);
-            }
+            sender.alertSendReturn(prev);
         }
     }
 }
 
-abstract class Question implements Tandem
+abstract class Question
 {
     protected AppForm mother;
     protected Restartable midlet;
@@ -641,6 +757,7 @@ abstract class Question implements Tandem
 
     abstract public HasAnswer[] fields();
     abstract public void reset();
+    abstract public HijacksDisplay displayIntentions();
 }
 
 class QuestionAnswerPair
@@ -727,9 +844,9 @@ class ChoiceQuestion extends Question implements HasAnswer
         return qnid;
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
-
+        return null;
     }
     
     public void reset()
@@ -738,7 +855,7 @@ class ChoiceQuestion extends Question implements HasAnswer
     }
 }
 
-class HelpQuestion extends Question implements HasAnswer, ItemCommandListener
+class HelpQuestion extends Question implements HasAnswer, HijacksDisplay, ItemCommandListener
 {
     protected ChoiceGroup chg;
     protected Command explain;
@@ -804,7 +921,12 @@ class HelpQuestion extends Question implements HasAnswer, ItemCommandListener
         return "";
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
+    {
+        return this;
+    }
+
+    public void surrender(Displayable d)
     {
         //  d.addCommand(explain);
         //  d.setCommandListener(this);
@@ -823,7 +945,7 @@ class HelpQuestion extends Question implements HasAnswer, ItemCommandListener
     }
 }
 
-class FewQuestion extends Question implements HasAnswer, Tandem
+class FewQuestion extends Question implements HasAnswer
 {
     protected TextField input;
     private String label, qnid;
@@ -864,9 +986,9 @@ class FewQuestion extends Question implements HasAnswer, Tandem
         return input;
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
-        
+        return null;
     }
 
     public void reset()
@@ -918,16 +1040,18 @@ class Submission extends Hashtable
     }
 }
 
-class LinkQuestion extends Question implements HasAnswer, ItemCommandListener
+class LinkQuestion extends Question implements HasAnswer, HijacksDisplay, ItemCommandListener
 {
     private String href, text;
     private StringItem linkField;
+    private Command linkClick;
 
     public LinkQuestion(Restartable m, Displayable d, String h, String t)
     {
         super(m, d);
         href        =   h;
         text        =   t;
+        linkClick   =   new Command(text, Command.OK, 0);
         linkField   =   new StringItem(href, text, StringItem.HYPERLINK);
         linkField.setItemCommandListener(this);
     }
@@ -976,9 +1100,14 @@ class LinkQuestion extends Question implements HasAnswer, ItemCommandListener
         return them;
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
+        return this;
+    }
 
+    public void surrender(Displayable d)
+    {
+        linkField.setItemCommandListener(this);
     }
 
 }
@@ -1032,34 +1161,36 @@ class SayQuestion extends Question implements HasAnswer
         return them;
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
-
+        return null;
     }
 
 }
 
-class PulserQuestion extends Question implements HasAnswer, CommandListener, Runnable
+class PulserQuestion extends Question implements HasAnswer, HijacksDisplay, CommandListener, PatientRunnable
 {
     private StringItem counter;
     private int count;
     private Command start, inc;
     private long duration;
     private String label, note;
-    private Thread interrupted, currentThread;
-    private boolean stillCounting;
+    private PatientRunnable current;
+    private boolean stillCounting, justDie;
     private Alarm alarm;
     private Displayable moi;
+    private App app;
     
-    public PulserQuestion(Restartable m, Displayable d, Alarm alm, String t, String n, long s)
+    public PulserQuestion(Restartable m, Displayable d, App a, Alarm alm, String t, String n, long s)
     {
         super(m, d);
         count           =   0;
         duration        =   s * 1000;
         label           =   t;
         note            =   n;
-        interrupted     =   null;
+        app             =   a;
         stillCounting   =   false;
+        justDie         =   false;
         alarm           =   alm;
         counter         =   new StringItem(label, "reset()");
         inc             =   new Command("+1", Command.OK, 0);
@@ -1095,7 +1226,12 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
         return Integer.toString(count);
     }
 
-    public void handOver(Tandem t, Displayable cur)
+    public HijacksDisplay displayIntentions()
+    {
+        return this;
+    }
+
+    public void surrender(Displayable cur)
     {
         reset();
         moi =   cur;
@@ -1106,30 +1242,24 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
     public void reset()
     {
         stillCounting = true;
+        justDie       = false;
         count         = 0;
-        interrupted   = null;
         counter.setText("To begin counting, press the Start button.");
-
-        currentThread = new Thread(this);
-        currentThread.start();
     }
 
-    public void run()
+    public void blessedArtThou(PatientRunnable me)
     {
+        if(current != me) return;
         try
         {
             Thread.sleep(duration);
         }
         catch(Exception e)
         {
-            interrupted = Thread.currentThread();
+            justDie = true;
         }
-        if(Thread.currentThread() == interrupted)
-            return;
-        if(Thread.currentThread() != currentThread)
-            return;
-        //  Because we stupidly call this every time the app starts up. I don’t have the time to re-design it.
-        try {moi.removeCommand(inc);} catch(Exception e) {/*e.printStackTrace();*/}
+        if(current != me) return;
+        if(justDie) return;
         stillCounting = false;
         commandAction(null, moi);
     }
@@ -1138,6 +1268,7 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
     {
         if(c == start)
         {
+            current = QualityControlledThread.withURL(app.qualityControlURL(), this, app.version() + ":" + app.status(), "PulserQuestion#commandAction(start)").giveFavour();
             d.removeCommand(start);
             counter.setLabel("Counting: ");
             d.addCommand(inc);
@@ -1145,14 +1276,16 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
         if((c == start || c == inc) && stillCounting)
         {
             ++count;
-            Display.getDisplay(midlet.asMIDlet()).vibrate(250);
+            Display disp = Display.getDisplay(midlet.asMIDlet());
+            disp.vibrate(250);
+            AlertType.CONFIRMATION.playSound(disp);
             counter.setText(Integer.toString(count));
         }
         else
         {
-            try{moi.removeCommand(inc);}catch(Exception e){ /*e.printStackTrace();*/}   //  Because we foolishly over-use this in different situations.
+            moi.removeCommand(inc);
             alarm.ring();
-            interrupted = currentThread;
+            justDie = true;
             Alert sofar = new Alert("Result: " + Integer.toString(count), Integer.toString(count) + " counts.\n\n" + note, null, AlertType.INFO);
             sofar.setTimeout(Alert.FOREVER);
             sofar.setCommandListener(new CommandListener()
@@ -1168,7 +1301,7 @@ class PulserQuestion extends Question implements HasAnswer, CommandListener, Run
     }
 }
 
-class CountDownQuestion extends Question implements HasAnswer, Runnable, CommandListener
+class CountDownQuestion extends Question implements HasAnswer, HijacksDisplay, PatientRunnable, CommandListener
 {
     private StringItem counter;
     private String title, note;
@@ -1177,13 +1310,15 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
     private Alarm alarm;
     private Displayable moi;
     private boolean hidden, active;
+    private App app;
 
-    public CountDownQuestion(Restartable m, Displayable d, Alarm alm, String t, String n, long ds)
+    public CountDownQuestion(Restartable m, Displayable d, App a, Alarm alm, String t, String n, long ds)
     {
         super(m, d);
         title       = t;
         note        = n;
         duration    = ds * 1000;
+        app         = a;
         bg          = new Command("Hide", Command.SCREEN, 0);
         start       = new Command("Start", Command.OK, 0);
         counter     = new StringItem(title, "reset()");
@@ -1218,7 +1353,7 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
         return "";
     }
 
-    public void run()
+    public void blessedArtThou(PatientRunnable me)
     {
         long pause = 1000;
         try
@@ -1230,7 +1365,7 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
                 mins = (++mins % 60);
                 if(mins != 0) continue;
                 Display.getDisplay(midlet.asMIDlet()).vibrate(500);
-                Display.getDisplay(midlet.asMIDlet()).flashBacklight(500);
+                Display.getDisplay(midlet.asMIDlet()).flashBacklight(1000);
             }
         }
         catch(Exception e) {}
@@ -1258,8 +1393,8 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
             moi.removeCommand(start);
             moi.addCommand(bg);
             active = true;
-            Thread thd = new Thread(this);
-            thd.start();
+            QualityControlledThread thd = QualityControlledThread.withURL(app.qualityControlURL(), this, app.version() + ":" + app.status(), "CountdownQuestion#commandAction(start)");
+            thd.giveFavour();
         }
         else
         {
@@ -1285,7 +1420,12 @@ class CountDownQuestion extends Question implements HasAnswer, Runnable, Command
         counter.setText(txt.toString());
     }
 
-    public void handOver(Tandem t, Displayable cur)
+    public HijacksDisplay displayIntentions()
+    {
+        return this;
+    }
+
+    public void surrender(Displayable cur)
     {
         reset();
         moi = cur;
@@ -1488,11 +1628,11 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
         }
         else if(qnom.equalsIgnoreCase("pulser"))
         {
-            q = new PulserQuestion(midlet, prev, alarm, curTitle, runChars, Long.parseLong(curSecs));
+            q = new PulserQuestion(midlet, prev, describedApp, alarm, curTitle, runChars, Long.parseLong(curSecs));
         }
         else if(qnom.equalsIgnoreCase("cd"))
         {
-            q = new CountDownQuestion(midlet, prev, alarm, curTitle, runChars, Long.parseLong(curSecs));
+            q = new CountDownQuestion(midlet, prev, describedApp, alarm, curTitle, runChars, Long.parseLong(curSecs));
         }
         else if(qnom.equalsIgnoreCase("choice"))
         {
@@ -1534,11 +1674,10 @@ class UpdateXMLHandler extends DefaultHandler implements CommandListener
     }
 }
 
-class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandListener
+class UpdaterQuestion extends Question implements HasAnswer, HijacksDisplay, PatientRunnable, CommandListener
 {
     private StringItem report;
     private Displayable nxt;
-    private Tandem tandem;
     private UpdateXMLHandler upx;
     private VHTCodeQuestion vhtCode;
     private Command update;
@@ -1591,8 +1730,7 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
             if(updating) return;
             updating = true;
             mother.displayForm().removeCommand(update);
-            Thread th = new Thread(this);
-            th.start();
+            QualityControlledThread.withURL(application.qualityControlURL(), this, application.version() + ":" + application.status(), "UpdaterQuestion#commandAction(update)").giveFavour();
         }
         else
         {
@@ -1657,40 +1795,53 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
         return false;
     }
 
-    public void handOver(Tandem t, Displayable cur)
+    public HijacksDisplay displayIntentions()
+    {
+        return this;
+    }
+
+    public void surrender(Displayable cur)
     {
         nxt       = cur;
-        tandem    = t;
         mother.displayForm().addCommand(update);
         cur.setCommandListener(this);
         reset();
     }
 
-    public void run()
+    public void blessedArtThou(PatientRunnable me)
     {
-        String[] urls = {"http://localhost:3000",
+        String[] urls = {// "http://localhost:3000",
                          "http://inscale.herokuapp.com",
                          "http://inscale.malariaconsortium.org",
                          "http://inscale.malariaconsortium.org:3000"};
         int wins          = urls.length;
-        byte[] dest       = null;
         String gotVersion = application.version();
         StringBuffer urlList    = new StringBuffer();
         String gotStatus        = application.status();
+        String bufRes           = "";
+        StringBuffer buff       = new StringBuffer(100);
+        String realU            = "";
         for(int notI = 0; notI < urls.length; ++notI)
         {
             try
             {
-                String realU    = urls[notI].concat("/system/get_latest/inscale/" + gotVersion + "/" + gotStatus + "?vht=" + vhtCode.getAnswer());
+                realU   = urls[notI].concat("/system/get_latest/inscale/" + gotVersion + "/" + gotStatus + "?vht=" + vhtCode.getAnswer());
                 report.setText("Trying " + realU + " ...");
                 urlList.append(realU);
                 HttpConnection htc = (HttpConnection) Connector.open(realU);
                 InputStream str    = htc.openInputStream();
-                dest               = new byte[(int) htc.getLength()];
-                str.read(dest);
+                report.setText("Connected to " + realU + " ...");
+                int got            = -1,
+                    notJ           = 0;
+                while((got = str.read()) != -1)
+                {
+                    report.setText(Integer.toString(++notJ) + " bytes from " + realU + " ... ");
+                    buff.append((char) got);
+                }
                 str.close();
                 htc.close();
-                if(recordWhatWeHave(dest))
+                bufRes  =   buff.toString();
+                if(recordWhatWeHave(bufRes.getBytes()))
                 {
                     Alert al = new Alert("Up-to-date", "Everything you have is up-to-date.", null, AlertType.CONFIRMATION);
                     al.setTimeout(Alert.FOREVER);
@@ -1699,20 +1850,20 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
                 }
                 else
                 {
+                    report.setText(report.getText() + " ... new questionnaire!\n\n[" + bufRes + "]");
                     if(! upx.isUpgrade)
                     {
-                        //  TODO: Review this. There is thrown an error due to an addCommand that follows it.
+                        updating = false;
                         midlet.restart();
+                        return;
                     }
                 }
-                report.setText(report.getText() + " ... succeeded!\n\n[" + new String(dest) + "]");
-//                Alert al = new Alert("Updated", "You now have a new questionnaire version: " + application.status(), null, AlertType.CONFIRMATION);
-//                al.setTimeout(Alert.FOREVER);
-//                Display.getDisplay(midlet.asMIDlet()).setCurrent(al, prev);
+                report.setText(report.getText() + " ... succeeded!\n\n[" + bufRes + "]");
                 break;
             }
             catch(IOException e)
             {
+                report.setText("Failed to connect to " + realU + ".");
                 urlList.append("\n\n");
                 --wins;
             }
@@ -1731,7 +1882,7 @@ class UpdaterQuestion extends Question implements HasAnswer, Runnable, CommandLi
     }
 }
 
-class TimestampQuestion extends Question implements Tandem, HasAnswer
+class TimestampQuestion extends Question implements HasAnswer
 {
     public TimestampQuestion(Restartable m, Displayable d)
     {
@@ -1764,9 +1915,9 @@ class TimestampQuestion extends Question implements Tandem, HasAnswer
         return "t";
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
-        
+        return null;
     }
 
     public void reset()
@@ -1775,7 +1926,7 @@ class TimestampQuestion extends Question implements Tandem, HasAnswer
     }
 }
 
-class VHTCodeQuestion extends Question implements Tandem, HasAnswer
+class VHTCodeQuestion extends Question implements HasAnswer
 {
     private TextField vent;
 
@@ -1813,9 +1964,9 @@ class VHTCodeQuestion extends Question implements Tandem, HasAnswer
         return "vc";
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
-
+        return null;
     }
 
     public void reset()
@@ -1824,7 +1975,7 @@ class VHTCodeQuestion extends Question implements Tandem, HasAnswer
     }
 }
 
-class DateQuestion extends Question implements Tandem, HasAnswer
+class DateQuestion extends Question implements HasAnswer
 {
     private DateField dateField;
     private String title;
@@ -1849,9 +2000,9 @@ class DateQuestion extends Question implements Tandem, HasAnswer
         return them;
     }
 
-    public void handOver(Tandem t, Displayable d)
+    public HijacksDisplay displayIntentions()
     {
-
+        return null;
     }
 
     public void reset()
@@ -1941,7 +2092,7 @@ class PendingMessages extends DefaultHandler
     }
 }
 
-class MeekList extends List implements Tandem
+class MeekList extends List
 {
     MIDlet mama;
 
@@ -1949,11 +2100,6 @@ class MeekList extends List implements Tandem
     {
         super(t, x);
         mama = m;
-    }
-
-    public void handOver(Tandem t, Displayable d)
-    {
-        Display.getDisplay(mama).setCurrent(this);
     }
 }
 
@@ -1964,7 +2110,7 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
     private Command pending, quitbut, /*formChoice,*/ version;
     private Stack already;
     private App application;
-    private SendPending sender;
+    //  private SendPending sender;
     private boolean onceBefore;
 
     private boolean getWhatWeHave()
@@ -1994,8 +2140,7 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         }
         catch(Exception e)
         {
-            //  e.printStackTrace();
-            appdescr = "<app>\n    <urls>\n        <u href=\"http://localhost:3000/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org:3000/record/\" />\n        <u href=\"http://inscale.malariaconsortium.org:3000/record/\" />\n        <u href=\"sms://+8779\" />\n    </urls>\n    <forms>\n        <f id=\"Weekly Report\" pre=\"vht \">\n            <t />\n            <vc />\n            <date>Start date:</date>\n            <few>\n                <i id=\"male\">Number of male children (SEX M):</i>\n                <i id=\"fem\">Number of female children (SEX F):</i>\n                <i id=\"rdtp\">Number of RDT results positive (+):</i>\n                <i id=\"rdtn\">Number of RDT results negative (-):</i>\n                <i id=\"diar\">Number of children with diarrhoea:</i>\n                <i id=\"fastb\">Number of children with fast breathing:</i>\n                <i id=\"fever\">Number of children with fever:</i>\n                <i id=\"danger\">Number of children with danger sign:</i>\n                <i id=\"treated\">Number of children treated within 24 hours:</i>\n                <i id=\"ors\">Number treated with ORS:</i>\n                <i id=\"zinc12\">Number treated with Zinc 1/2 tablet:</i>\n                <i id=\"zinc\">Number treated with Zinc 1 tablet:</i>\n                <i id=\"amoxr\">Number treated with Amoxicillin Red:</i>\n                <i id=\"amoxg\">Number treated with Amoxicillin Green:</i>\n                <i id=\"coary\">Number treated with ACT - Coartem Yellow:</i>\n                <i id=\"coarb\">Number treated with ACT - Coartem Blue:</i>\n                <i id=\"recart\">Number treated with Rectal Artesunate (total):</i>\n                <i id=\"ref\">Number of children referred:</i>\n                <i id=\"death\">Number of children who died:</i>\n                <i id=\"mnew\">Number of male newborns (SEX M):</i>\n                <i id=\"fnew\">Number of female newborns (SEX F):</i>\n                <i id=\"hv1\">Number of home visits Day 1:</i>\n                <i id=\"hv3\">Number of home visits Day 3:</i>\n                <i id=\"hv7\">Number of home visits Day 7:</i>\n                <i id=\"newbdanger\">Number of newborns with danger signs:</i>\n                <i id=\"newbref\">Number of newborns referred:</i>\n                <i id=\"yellow\">Number of children with Yellow MUAC:</i>\n                <i id=\"red\">Number of children with Red MUAC/Oedema:</i>\n            </few>\n            <int>\n                <x id=\"recartbal\">Rectal Artesunate balance:</x>\n                <x id=\"orsbal\">ORS balance:</x>\n                <x id=\"zincbal\">Zinc balance:</x>\n                <x id=\"yactbal\">Yellow ACT balance:</x>\n                <x id=\"bactbal\">Blue ACT balance:</x>\n                <x id=\"ramoxbal\">Red Amoxicillin balance:</x>\n                <x id=\"gamoxbal\">Green Amoxicillin balance:</x>\n                <x id=\"rdtbal\">RDT balance:</x>\n            </int>\n            <choice t=\"Pairs of gloves balance\" id=\"glvbal\">\n                <o v=\"MT5\">5 pairs or more</o>\n                <o v=\"LT5\">Less than 5 pairs</o>\n            </choice>\n        </f>\n        <f id=\"Respiratory Timer\" r=\"no\">\n            <pulser secs=\"60\" t=\"Respiratory Timer\">Please note the number of breaths per minute.</pulser>\n        </f>\n        <f id=\"RDT Timer\" r=\"no\">\n            <cd secs=\"900\" t=\"RDT Countdown Timer\">15 minutes have elapsed. Please check and record the results.</cd>\n        </f>\n    </forms>\n</app>";
+            e.printStackTrace();
         }
         return false;
     }
@@ -2045,11 +2190,11 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         quitbut         = new Command("Quit", Command.EXIT, 0);
         //  formChoice      = new Command("Run", Command.OK, 4);
         version         = new Command("Version Details", Command.HELP, 1);
-        application     = new App(this);
-        sender          = new SendPending(mainMenu, this, application);
+        application     = new App(this, mainMenu);
+        //  sender          = new SendPending(mainMenu, this, application);
         already         = new Stack();
         onceBefore      = false;
-        application.setSender(sender);
+        //  application.setSender(sender);
         this.loadPending();
         mainMenu.addCommand(pending);
         mainMenu.addCommand(quitbut);
@@ -2067,25 +2212,17 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
     {
         if(onceBefore)
         {
-            Alert quitter = new Alert("Restart", "The recent update (" + application.status() + ") requires a restart.", null, AlertType.INFO);
+            Alert quitter = new Alert("New questionnaire", "You have a new questionnaire; version: " + application.status(), null, AlertType.INFO);
             quitter.setTimeout(Alert.FOREVER);
             final MIDlet me = this;
-            quitter.setCommandListener(new CommandListener()
-            {
-                public void commandAction(Command c, Displayable d)
-                {
-                    me.notifyDestroyed();
-                }
-            });
             Display.getDisplay(me).setCurrent(quitter, mainMenu);
-            return;
         }
         mainMenu.deleteAll();
         String descr = this.loadDescription();
-        application.initialiseForms(descr, already, this, mainMenu);
+        application.initialiseForms(descr, already, this);
         paint(mainMenu, application.getForms());
         mainMenu.setSelectedIndex(0, true);
-        Display.getDisplay(this).setCurrent(mainMenu);
+        if(! onceBefore) Display.getDisplay(this).setCurrent(mainMenu);
         onceBefore = true;
     }
 
@@ -2097,16 +2234,7 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         }
         else if(c == pending)
         {
-            sender.handOver(mainMenu, d);
-            Alert alt   =   sender.informationAlert();
-            if(sender.sendPending())
-            {
-                Display.getDisplay(this).setCurrent(alt, sender.sendingProcess(d));
-            }
-            else
-            {
-                Display.getDisplay(this).setCurrent(alt, d);
-            }
+            application.getSender().alertSendReturn(d);
         }
         else if(c == version)
         {

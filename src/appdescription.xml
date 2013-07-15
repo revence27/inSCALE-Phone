@@ -3,11 +3,7 @@
         <!--<u href="http://localhost:3000/inbound" />-->
         <u href="http://inscale.herokuapp.com/inbound" />
         <u href="http://inscale.herokuapp.com/inbound" />
-        <u href="http://inscale.malariaconsortium.org/inbound" />
-        <u href="http://inscale.malariaconsortium.org/inbound" />
-        <u href="http://inscale.malariaconsortium.org:3000/inbound" />
-        <u href="http://inscale.malariaconsortium.org:3000/inbound" />
-        <u href="sms://+8779" />
+        <!--    <u href="sms://+8181" />    -->
     </urls>
     <forms>
         <f id="Weekly Report" pre="vht ">
