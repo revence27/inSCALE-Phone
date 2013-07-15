@@ -118,21 +118,21 @@ class SendPending extends Form implements PatientRunnable, CommandListener
     private App app;
     private Command back, retry;
     private QualityControlledThread meself;
-    private static boolean grace;
-
+    private boolean retrying;
+    
     public SendPending(MIDlet m, Displayable p, App a)
     {
         super("Pending Submissions");
         app         = a;
         mama        = m;
         prev        = p;
-        grace       = false;
         title       = "Pending Submissions";
         response    = null;
         meself      = QualityControlledThread.withURL(app.qualityControlURL(), this, app.version() + ":" + app.status(), "SendPending");
         label       = new StringItem(title, "Sending pending submissions ...");
         back        = new Command("Back", Command.BACK, 0);
         retry       = new Command("Retry", Command.OK, 0);
+        retrying    = false;
         this.append(label);
         this.addCommand(back);
         this.setCommandListener(this);
@@ -146,8 +146,8 @@ class SendPending extends Form implements PatientRunnable, CommandListener
         }
         else if(c == retry)
         {
+            retrying = true;
             this.removeCommand(retry);
-            meself.giveFavour();
         }
     }
 
@@ -237,87 +237,96 @@ class SendPending extends Form implements PatientRunnable, CommandListener
         return false;
     }
 
+    public void startSending()
+    {
+        meself.giveFavour();    //  John 1:16
+    }
+
     public void blessedArtThou(PatientRunnable me)
     {
-        grace         = true;
-        Stack them    = app.getPending();
-        Vector urls   = app.getURLs();
-        String err    = "";
-        int tries     = them.size();
-        while(!them.isEmpty())
+        Stack them;
+        Vector urls         = app.getURLs();
+        Submission nxt      = null;
+        boolean attempted   = false;
+        long pause          = 5;
+        while(true)
         {
-            if(tries < 1) break;
-            --tries;
-            Submission nxt  = (Submission) them.peek();
+            them    = app.getPending();
             try
             {
+                nxt  = (Submission) them.peek();
+            }
+            catch(EmptyStackException ese)
+            {
+                if(attempted)
+                {
+                    label.setLabel("Sent Successfully!");
+                    label.setText("All pending submissions have been sent.");
+                    Display disp = Display.getDisplay(mama);
+                    disp.flashBacklight(5000);
+                    disp.vibrate(1000);
+                    label.setText(response == null ? label.getText() : response);
+                    Alert conf = new Alert(label.getLabel(), label.getText(), null, AlertType.INFO);
+                    conf.setTimeout(Alert.FOREVER);
+                    Displayable theNext = Display.getDisplay(mama).getCurrent();
+                    if(theNext == null) theNext = prev;
+                    Display.getDisplay(mama).setCurrent(conf, theNext);
+                }
+                try
+                {
+                    Thread.sleep(pause * 1000);
+                }
+                catch(Exception e)
+                {
+                    break;
+                }
+                continue;
+            }
+            try
+            {
+                attempted = true;
                 if(attemptSending(nxt, urls))
                 {
                     them.pop();
                     Display.getDisplay(mama).vibrate(500);
+                    app.savePending(them);
+                    pause = 5;
+                    continue;
                 }
-                else
-                {
-                    err = "Submission could not be sent on " + Integer.toString(urls.size()) + " points of submission.";
-                }
+                retrying = false;
+                this.addCommand(retry);
+                ++pause;
+                label.setLabel("Message sending failed.");
             }
             catch(Exception e)
             {
-                err = "Sending error: " + (err.equals("") ? "" : "\n\n") + e.getMessage();
+                ++pause;
+                label.setLabel(e.getMessage());
             }
-        }
-        if(them.size() != 0)
-        {
-            this.addCommand(retry);
-            label.setLabel("Message sending failed.");
-            label.setText(err + " Failed to submit after " + Integer.toString(urls.size()) + " attempts.");
-        }
-        else
-        {
-            label.setLabel("Sent Successfully!");
-            label.setText("All pending submissions have been sent.");
-            Display disp = Display.getDisplay(mama);
-            disp.flashBacklight(5000);
-            disp.vibrate(1000);
             try
             {
-                Thread.sleep(5000);
+                label.setText("Submission could not be sent on " + Integer.toString(urls.size()) + " points of submission.\n\n Will try again after " + Long.toString(pause) + " seconds.");
+                for(long mepause = pause; mepause > 0; --mepause)
+                {
+                    if(retrying) break;
+                    Thread.sleep(500);
+                    if(retrying) break;
+                }
             }
-            catch(Exception e) {}
+            catch(Exception exe) {}
         }
-        app.savePending(them);
-        Alert conf = new Alert(label.getLabel(), (response == null ? label.getText() : response), null, AlertType.INFO);
-        conf.setTimeout(Alert.FOREVER);
-        Display.getDisplay(mama).setCurrent(conf, prev);
-        //  grace = false;  //  TODO: First make thread-safe queues and then re-enable this.
     }
 
-    public boolean sendPending()
-    {
-        if(grace) return true;
-        Stack them = app.getPending();
-        if(them.size() < 1) return false;
-        meself.giveFavour();
-        return true;
-    }
-
-    public void alertSendReturn(Displayable _)
+    public void alertShow(Displayable _)
     {
         Alert alt   = informationAlert();
-        if(grace)
+        if(app.getPending().size() < 1)
         {
-            Display.getDisplay(mama).setCurrent(alt, this);
+            Display.getDisplay(mama).setCurrent(alt, prev);
         }
         else
         {
-            if(sendPending())
-            {
-                Display.getDisplay(mama).setCurrent(alt, this);
-            }
-            else
-            {
-                Display.getDisplay(mama).setCurrent(alt, prev);
-            }
+            Display.getDisplay(mama).setCurrent(alt, this);
         }
     }
 
@@ -717,7 +726,7 @@ class AppForm extends Vector implements CommandListener
             themAll.push(subm);
             application.savePending(themAll);
             SendPending sender = application.getSender();
-            sender.alertSendReturn(prev);
+            sender.alertShow(prev);
         }
     }
 }
@@ -2200,6 +2209,7 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         mainMenu.addCommand(quitbut);
         mainMenu.addCommand(version);
         mainMenu.setCommandListener(this);
+        application.getSender().startSending();
         restart();
     }
 
@@ -2234,7 +2244,7 @@ public class inSCALE extends MIDlet implements CommandListener, Restartable
         }
         else if(c == pending)
         {
-            application.getSender().alertSendReturn(d);
+            application.getSender().alertShow(d);
         }
         else if(c == version)
         {
